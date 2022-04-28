@@ -97,7 +97,8 @@ def simulate_physics(min_simulation_time: float = 4.0, max_simulation_time: floa
     for obj in get_all_mesh_objects():
         if obj.has_rigidbody_enabled():
             prev_origin = obj.get_origin()
-            new_origin = obj.set_origin(mode="CENTER_OF_VOLUME")
+            #new_origin = obj.set_origin(mode="CENTER_OF_VOLUME")
+            new_origin = obj.get_origin() # TODO: KEVIN
             origin_shift[obj.get_name()] = new_origin - prev_origin
 
             # Persist mesh scaling as having a scale != 1 can make the simulation unstable
