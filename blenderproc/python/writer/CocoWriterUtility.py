@@ -21,7 +21,9 @@ def write_coco_annotations(output_dir: str, instance_segmaps: Optional[List[np.n
                            mask_encoding_format: str = "rle", supercategory: str = "coco_annotations",
                            append_to_existing_output: bool = True, segmap_output_key: str = "segmap",
                            segcolormap_output_key: str = "segcolormap", rgb_output_key: str = "colors",
-                           jpg_quality: int = 95, label_mapping: LabelIdMapping = None, file_prefix: str = ""):
+                           jpg_quality: int = 95, label_mapping: LabelIdMapping = None, file_prefix: str = "",
+                           annotations_file_name: str='coco_annotations.json',
+                           image_data_rel_path: str = '.'):
     """ Writes coco annotations in the following steps:
     1. Locate the seg images
     2. Locate the rgb maps
@@ -50,6 +52,7 @@ def write_coco_annotations(output_dir: str, instance_segmaps: Optional[List[np.n
     :param label_mapping: The label mapping which should be used to label the categories based on their ids.
                           If None, is given then the `name` field in the csv files is used or - if not existing - the category id itself is used.
     :param file_prefix: Optional prefix for image file names
+    :param annotations_file_name: Optional file name of output annotations file
     """
     if instance_segmaps is None:
         instance_segmaps = []
@@ -82,7 +85,7 @@ def write_coco_annotations(output_dir: str, instance_segmaps: Optional[List[np.n
             raise Exception("There is no output registered with key {}. Are you sure you ran the SegMapRenderer module "
                             "with 'map_by' set to 'instance' before?".format(segcolormap_output_key))
 
-    coco_annotations_path = os.path.join(output_dir, "coco_annotations.json")
+    coco_annotations_path = os.path.join(output_dir, annotations_file_name)
     # Calculate image numbering offset, if append_to_existing_output is activated and coco data exists
     if append_to_existing_output and os.path.exists(coco_annotations_path):
         with open(coco_annotations_path, 'r') as fp:
@@ -152,7 +155,8 @@ def write_coco_annotations(output_dir: str, instance_segmaps: Optional[List[np.n
                                                               supercategory,
                                                               mask_encoding_format,
                                                               existing_coco_annotations,
-                                                              label_mapping)
+                                                              label_mapping,
+                                                              image_data_rel_path)
 
     print("Writing coco annotations to " + coco_annotations_path)
     with open(coco_annotations_path, 'w') as fp:
@@ -160,7 +164,7 @@ def write_coco_annotations(output_dir: str, instance_segmaps: Optional[List[np.n
 
 
 def binary_mask_to_rle(binary_mask: np.ndarray) -> Dict[str, List[int]]:
-    """Converts a binary mask to COCOs run-length encoding (RLE) format. Instead of outputting 
+    """Converts a binary mask to COCOs run-length encoding (RLE) format. Instead of outputting
     a mask image, you give a list of start pixels and how many pixels after each of those
     starts are included in the mask.
     :param binary_mask: a 2D binary numpy array where '1's represent the object
@@ -199,7 +203,8 @@ class CocoWriterUtility:
     @staticmethod
     def generate_coco_annotations(inst_segmaps, inst_attribute_maps, image_paths, supercategory,
                                   mask_encoding_format, existing_coco_annotations=None,
-                                  label_mapping: LabelIdMapping = None):
+                                  label_mapping: LabelIdMapping = None,
+                                  image_data_rel_path: str = '.'):
         """Generates coco annotations for images
 
         :param inst_segmaps: List of instance segmentation maps
@@ -268,7 +273,7 @@ class CocoWriterUtility:
 
             # Add coco info for image
             image_id = len(images)
-            images.append(CocoWriterUtility.create_image_info(image_id, image_path, inst_segmap.shape))
+            images.append(CocoWriterUtility.create_image_info(image_id, os.path.relpath(image_path, image_data_rel_path), inst_segmap.shape))
 
             # Go through all objects visible in this image
             instances = np.unique(inst_segmap)
