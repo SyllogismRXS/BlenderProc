@@ -1,8 +1,12 @@
+"""Provides functionality to render a color, normal, depth and distance image."""
+
 import os
 from typing import Union, Dict, List, Set, Optional
+import math
+import sys
+import platform
 
 import mathutils
-import math
 import bpy
 import numpy as np
 
@@ -11,7 +15,7 @@ from blenderproc.python.modules.main.GlobalStorage import GlobalStorage
 from blenderproc.python.utility.BlenderUtility import get_all_blender_mesh_objects
 from blenderproc.python.utility.DefaultConfig import DefaultConfig
 from blenderproc.python.utility.Utility import Utility
-from blenderproc.python.writer.WriterUtility import WriterUtility
+from blenderproc.python.writer.WriterUtility import _WriterUtility
 
 
 def set_denoiser(denoiser: Optional[str]):
@@ -23,7 +27,7 @@ def set_denoiser(denoiser: Optional[str]):
                      If None is given, then no denoiser will be active.
     """
     # Make sure there is no denoiser active
-    _disable_all_denoiser()
+    disable_all_denoiser()
     if denoiser is None:
         pass
     elif denoiser.upper() == "OPTIX":
@@ -94,7 +98,8 @@ def set_light_bounces(diffuse_bounces: Optional[int] = None, glossy_bounces: Opt
 def set_cpu_threads(num_threads: int):
     """ Sets the number of CPU cores to use simultaneously while rendering.
 
-    :param num_threads: The number of threads to use. If 0 is given the number is automatically detected based on the cpu cores.
+    :param num_threads: The number of threads to use. If 0 is given the number is automatically detected based
+                        on the cpu cores.
     """
     # If set to 0, use number of cores (default)
     if num_threads > 0:
@@ -117,7 +122,8 @@ def toggle_stereo(enable: bool):
 def set_simplify_subdivision_render(simplify_subdivision_render: int):
     """ Sets global maximum subdivision level during rendering to speedup rendering.
 
-    :param simplify_subdivision_render: The maximum subdivision level. If 0 is given, simplification of scene is disabled.
+    :param simplify_subdivision_render: The maximum subdivision level. If 0 is given, simplification of scene
+                                        is disabled.
     """
     if simplify_subdivision_render > 0:
         bpy.context.scene.render.use_simplify = True
@@ -155,19 +161,20 @@ def set_max_amount_of_samples(samples: int):
     bpy.context.scene.cycles.samples = samples
 
 
-def enable_distance_output(activate_antialiasing: bool, output_dir: Optional[str] = None, file_prefix: str = "distance_",
+def enable_distance_output(activate_antialiasing: bool, output_dir: Optional[str] = None,
+                           file_prefix: str = "distance_",
                            output_key: str = "distance", antialiasing_distance_max: float = None,
                            convert_to_depth: bool = False):
     """ Enables writing distance images.
 
 
-    :param activate_antialiasing: If this is True the final image will be antialiased
+    :param activate_antialiasing: If this is True the final image will be anti-aliased
     :param output_dir: The directory to write files to, if this is None the temporary directory is used.
     :param file_prefix: The prefix to use for writing the files.
     :param output_key: The key to use for registering the distance output.
-    :param antialiasing_distance_max: Max distance in which the distance is measured. Resolution decreases antiproportionally. \
-                            Only if activate_antialiasing is True.
-    :param convert_to_depth: If this is true, while loading a postprocessing step is executed to convert this distance\
+    :param antialiasing_distance_max: Max distance in which the distance is measured. Resolution decreases
+                                      antiproportionally. Only if activate_antialiasing is True.
+    :param convert_to_depth: If this is true, while loading a postprocessing step is executed to convert this distance
                              image to a depth image
     """
     if not activate_antialiasing:
@@ -183,7 +190,7 @@ def enable_distance_output(activate_antialiasing: bool, output_dir: Optional[str
               "currently not supported, but there is an easy way to solve this, you can use the " \
               "bproc.postprocessing.dist2depth and depth2dist function on the output of the renderer and generate " \
               "the antialiased depth image yourself."
-        raise Exception(msg)
+        raise RuntimeError(msg)
     GlobalStorage.add("distance_output_is_enabled", True)
 
     bpy.context.scene.render.use_compositing = True
@@ -226,6 +233,7 @@ def enable_distance_output(activate_antialiasing: bool, output_dir: Optional[str
         "trim_redundant_channels": True,
         "convert_to_depth": convert_to_depth
     })
+    return None
 
 
 def enable_depth_output(activate_antialiasing: bool, output_dir: Optional[str] = None, file_prefix: str = "depth_",
@@ -245,19 +253,19 @@ def enable_depth_output(activate_antialiasing: bool, output_dir: Optional[str] =
                                 image to a distance image
     """
     if activate_antialiasing:
-        return enable_distance_output(activate_antialiasing, output_dir, file_prefix, output_key, antialiasing_distance_max, convert_to_depth=True)
+        return enable_distance_output(activate_antialiasing, output_dir, file_prefix, output_key,
+                                      antialiasing_distance_max, convert_to_depth=True)
     if output_dir is None:
         output_dir = Utility.get_temporary_directory()
 
     if GlobalStorage.is_in_storage("depth_output_is_enabled"):
         msg = "The depth enable function can not be called twice. Either you called it twice or you used the " \
-              "enable_distance_output with activate_antialiasing=False, which internally calls this function. This is " \
-              "currently not supported, but there is an easy way to solve this, you can use the " \
+              "enable_distance_output with activate_antialiasing=False, which internally calls this function. This " \
+              "is currently not supported, but there is an easy way to solve this, you can use the " \
               "bproc.postprocessing.dist2depth and depth2dist function on the output of the renderer and generate " \
               "the antialiased distance image yourself."
-        raise Exception(msg)
+        raise RuntimeError(msg)
     GlobalStorage.add("depth_output_is_enabled", True)
-
 
     bpy.context.scene.render.use_compositing = True
     bpy.context.scene.use_nodes = True
@@ -286,6 +294,7 @@ def enable_depth_output(activate_antialiasing: bool, output_dir: Optional[str] =
         "trim_redundant_channels": True,
         "convert_to_distance": convert_to_distance
     })
+    return None
 
 
 def enable_normals_output(output_dir: Optional[str] = None, file_prefix: str = "normals_",
@@ -443,12 +452,11 @@ def map_file_format_to_file_ending(file_format: str) -> str:
     """
     if file_format == 'PNG':
         return ".png"
-    elif file_format == 'JPEG':
+    if file_format == 'JPEG':
         return ".jpg"
-    elif file_format == 'OPEN_EXR':
+    if file_format == 'OPEN_EXR':
         return ".exr"
-    else:
-        raise Exception("Unknown Image Type " + file_format)
+    raise RuntimeError(f"Unknown Image Type {file_format}")
 
 
 def render(output_dir: Optional[str] = None, file_prefix: str = "rgb_", output_key: Optional[str] = "colors",
@@ -496,18 +504,20 @@ def render(output_dir: Optional[str] = None, file_prefix: str = "rgb_", output_k
         # Revert changes
         bpy.context.scene.frame_end += 1
     else:
-        raise Exception("No camera poses have been registered, therefore nothing can be rendered. A camera pose can be registered via bproc.camera.add_camera_pose().")
+        raise RuntimeError("No camera poses have been registered, therefore nothing can be rendered. A camera "
+                           "pose can be registered via bproc.camera.add_camera_pose().")
 
-    return WriterUtility.load_registered_outputs(load_keys, keys_with_alpha_channel) if return_data else {}
+    return _WriterUtility.load_registered_outputs(load_keys, keys_with_alpha_channel) if return_data else {}
 
 
-def set_output_format(file_format: str = None, color_depth: int = None, enable_transparency: bool = None,
-                      jpg_quality: int = None):
+def set_output_format(file_format: Optional[str] = None, color_depth: Optional[int] = None,
+                      enable_transparency: Optional[bool] = None, jpg_quality: Optional[int] = None):
     """ Sets the output format to use for rendering. Default values defined in DefaultConfig.py.
 
     :param file_format: The file format to use, e.q. "PNG", "JPEG" or "OPEN_EXR".
     :param color_depth: The color depth.
-    :param enable_transparency: If true, the output will contain a alpha channel and the background will be set transparent.
+    :param enable_transparency: If true, the output will contain a alpha channel and the background will be
+                                set transparent.
     :param jpg_quality: The quality to use, if file format is set to "JPEG".
     """
     if enable_transparency is not None:
@@ -540,7 +550,7 @@ def enable_motion_blur(motion_blur_length: float = 0.5, rolling_shutter_type: st
     bpy.context.scene.cycles.rolling_shutter_duration = rolling_shutter_length
 
 
-def _render_init():
+def render_init():
     """ Initializes the renderer.
 
     This enables the cycles renderer and sets some options to speedup rendering.
@@ -555,13 +565,14 @@ def _render_init():
     bpy.context.scene.render.use_persistent_data = True
 
 
-def _disable_all_denoiser():
+def disable_all_denoiser():
     """ Disables all denoiser.
 
     At the moment this includes the cycles and the intel denoiser.
     """
     # Disable cycles denoiser
     bpy.context.view_layer.cycles.use_denoising = False
+    bpy.context.scene.cycles.use_denoising = False
 
     # Disable intel denoiser
     if bpy.context.scene.use_nodes:
@@ -585,11 +596,10 @@ def _disable_all_denoiser():
             nodes.remove(denoiser_node)
 
 
-
 def set_world_background(color: List[float], strength: float = 1):
     """ Sets the color of blenders world background
 
-    :param color: A three dimensional list specifying the new color in floats.
+    :param color: A three-dimensional list specifying the new color in floats.
     :param strength: The strength of the emitted background light.
     """
     world = bpy.context.scene.world
@@ -603,3 +613,83 @@ def set_world_background(color: List[float], strength: float = 1):
 
     nodes.get("Background").inputs['Strength'].default_value = strength
     nodes.get("Background").inputs['Color'].default_value = color + [1]
+
+
+def enable_experimental_features():
+    """ Enables experimental cycles features. """
+    bpy.context.scene.cycles.feature_set = 'EXPERIMENTAL'
+
+
+def set_render_devices(use_only_cpu: bool = False, desired_gpu_device_type: Union[str, List[str]] = None,
+                       desired_gpu_ids: Union[int, List[int]] = None):
+    """ Configures the devices to use for rendering.
+
+    :param use_only_cpu: If True, only the cpu is used for rendering.
+    :param desired_gpu_device_type: One or multiple GPU device types to consider. If multiple are given,
+                                    the first available is used. Possible choices are ["OPTIX", "CUDA",
+                                    "METAL", "HIP"]. Default is ["OPTIX", "CUDA", "HIP"] on linux/windows and
+                                    ["METAL"] on supported Mac devices.
+    :param desired_gpu_ids: One or multiple GPU ids to specifically use. If none is given, all suitable GPUs are used.
+    """
+    # Mark beginning of selection to avoid confusion when calling set_render_devices multiple times:
+    print("Selecting render devices...")
+
+    if desired_gpu_device_type is None:
+        # If no gpu types are specified, use the default types based on the OS
+        if sys.platform == "darwin":
+            mac_version = platform.mac_ver()[0]
+            mac_version_numbers = [int(ele) for ele in mac_version.split(".")]
+            # On recent macs, use METAL, otherwise use cpu only
+            if (mac_version_numbers[0] == 12 and mac_version_numbers[1] >= 3) or mac_version_numbers[0] > 12:
+                desired_gpu_device_type = ["METAL"]
+            else:
+                desired_gpu_device_type = []
+        else:
+            # Define default for linux and windows
+            desired_gpu_device_type = ["OPTIX", "CUDA", "HIP"]
+    elif not isinstance(desired_gpu_device_type, list):
+        # Make sure it's a list
+        desired_gpu_device_type = [desired_gpu_device_type]
+
+    # Make sure desired_gpu_device_type is a list
+    if desired_gpu_ids is not None and not isinstance(desired_gpu_ids, list):
+        desired_gpu_ids = [desired_gpu_ids]
+
+    # Decide between gpu and cpu rendering
+    if not desired_gpu_device_type or use_only_cpu:
+        # Use only CPU
+        bpy.context.scene.cycles.device = "CPU"
+        bpy.context.preferences.addons['cycles'].preferences.compute_device_type = "NONE"
+        print("Using only the CPU for rendering")
+    else:
+        # Use GPU
+        bpy.context.scene.cycles.device = "GPU"
+        preferences = bpy.context.preferences.addons['cycles'].preferences
+
+        # Go over all specified device types
+        found = False
+        for device_type in desired_gpu_device_type:
+            # Check if there are devices that support that type
+            devices = preferences.get_devices_for_type(device_type)
+            if devices:
+                # Set device type
+                bpy.context.preferences.addons['cycles'].preferences.compute_device_type = device_type
+                # Go over all devices with that type
+                found = False
+                for i, device in enumerate(devices):
+                    # Only use gpus with specified ids
+                    if desired_gpu_ids is None or i in desired_gpu_ids:
+                        print(f"Device {device.name} of type {device.type} found and used.")
+                        device.use = True
+                        found = True
+                    else:
+                        device.use = False
+
+                if not found:
+                    raise RuntimeError(f"The specified gpu ids lead to no selected gpu at all. Valid gpu ids are "
+                                       f"{list(range(len(devices)))}")
+
+                break
+
+        if not found:
+            raise RuntimeError(f"No GPU could be found with the specified device types: {desired_gpu_device_type}")

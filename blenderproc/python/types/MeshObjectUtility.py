@@ -1,27 +1,30 @@
+""" All mesh objects are captured in this class. """
+
 from typing import List, Union, Tuple, Optional
+from sys import platform
 
 import bpy
 import numpy as np
 import bmesh
 import mathutils
 from mathutils import Vector, Matrix
-from sys import platform
 
-
-if platform != "win32":
-    # this is only supported under linux and mac os, the import itself already doesn't work under windows
-    from blenderproc.external.vhacd.decompose import convex_decomposition
 from blenderproc.python.types.EntityUtility import Entity
 from blenderproc.python.utility.Utility import Utility, resolve_path
 from blenderproc.python.utility.BlenderUtility import get_all_blender_mesh_objects
 from blenderproc.python.types.MaterialUtility import Material
 from blenderproc.python.material import MaterialLoaderUtility
 
+if platform != "win32":
+    # this is only supported under linux and macOS, the import itself already doesn't work under windows
+    from blenderproc.external.vhacd.decompose import convex_decomposition
+
 
 class MeshObject(Entity):
-
-    def __init__(self, bpy_object: bpy.types.Object):
-        super().__init__(bpy_object)
+    """
+    Every instance of this class is a mesh which can be rendered in the scene. It can have multiple materials and
+    different configurations of vertices with faces and edges.
+    """
 
     def get_materials(self) -> List[Optional[Material]]:
         """ Returns the materials used by the mesh.
@@ -31,6 +34,11 @@ class MeshObject(Entity):
         return MaterialLoaderUtility.convert_to_materials(self.blender_obj.data.materials)
 
     def has_materials(self) -> bool:
+        """
+        Returns True if the object has material slots. This does not necessarily mean any `Material` is assigned to it.
+
+        :return: True if the object has material slots.
+        """
         return len(self.blender_obj.data.materials) > 0
 
     def set_material(self, index: int, material: Material):
@@ -71,15 +79,24 @@ class MeshObject(Entity):
         # add the new one
         self.add_material(material)
 
-    def duplicate(self) -> "MeshObject":
+    def duplicate(self, duplicate_children: bool = True) -> "MeshObject":
         """ Duplicates the object.
 
+        :param duplicate_children: If True, also all children objects are recursively duplicated.
         :return: A new mesh object, which is a duplicate of this object.
         """
         new_entity = self.blender_obj.copy()
         new_entity.data = self.blender_obj.data.copy()
         bpy.context.collection.objects.link(new_entity)
-        return MeshObject(new_entity)
+
+        duplicate_obj = MeshObject(new_entity)
+
+        if duplicate_children:
+            for child in self.get_children():
+                duplicate_child = child.duplicate(duplicate_children=duplicate_children)
+                duplicate_child.set_parent(duplicate_obj)
+
+        return duplicate_obj
 
     def get_mesh(self) -> bpy.types.Mesh:
         """ Returns the blender mesh of the object.
@@ -105,7 +122,7 @@ class MeshObject(Entity):
             self.blender_obj.data.use_auto_smooth = True
             self.blender_obj.data.auto_smooth_angle = np.deg2rad(angle_value)
         else:
-            raise Exception("This shading mode is unknown: {}".format(mode))
+            raise RuntimeError(f"This shading mode is unknown: {mode}")
 
         for face in self.get_mesh().polygons:
             face.use_smooth = is_smooth
@@ -122,6 +139,7 @@ class MeshObject(Entity):
         bb_center = np.mean(bb, axis=0)
         bb_min_z_value = np.min(bb, axis=0)[2]
         bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_all(action='SELECT')
         bpy.ops.transform.translate(value=[-bb_center[0], -bb_center[1], -bb_min_z_value])
         bpy.ops.object.mode_set(mode='OBJECT')
         self.deselect()
@@ -133,8 +151,7 @@ class MeshObject(Entity):
         if not local_coords:
             local2world = Matrix(self.get_local2world_mat())
             return np.array([local2world @ Vector(cord) for cord in self.blender_obj.bound_box])
-        else:
-            return np.array([Vector(cord) for cord in self.blender_obj.bound_box])
+        return np.array([Vector(cord) for cord in self.blender_obj.bound_box])
 
     def persist_transformation_into_mesh(self, location: bool = True, rotation: bool = True, scale: bool = True):
         """
@@ -158,10 +175,13 @@ class MeshObject(Entity):
     def set_origin(self, point: Union[list, np.ndarray, Vector] = None, mode: str = "POINT") -> np.ndarray:
         """ Sets the origin of the object.
 
-        This will not change the appearing pose of the object, as the vertex locations experience the inverse transformation applied to the origin.
+        This will not change the appearing pose of the object, as the vertex locations experience the inverse
+        transformation applied to the origin.
 
-        :param point: The point in world coordinates to which the origin should be set. This parameter is only relevent if mode is set to "POINT".
-        :param mode: The mode specifying how the origin should be set. Available options are: ["POINT", "CENTER_OF_MASS", "CENTER_OF_VOLUME"]
+        :param point: The point in world coordinates to which the origin should be set. This parameter is only
+                      relevant if mode is set to "POINT".
+        :param mode: The mode specifying how the origin should be set. Available options are: ["POINT",
+                     "CENTER_OF_MASS", "CENTER_OF_VOLUME"]
         :return: The new origin in world coordinates.
         """
         context = {"selected_editable_objects": [self.blender_obj]}
@@ -183,16 +203,23 @@ class MeshObject(Entity):
         return self.get_origin()
 
     def enable_rigidbody(self, active: bool, collision_shape: str = 'CONVEX_HULL', collision_margin: float = 0.001,
-                         collision_mesh_source: str = "FINAL", mass: float = None, mass_factor: float = 1,
+                         collision_mesh_source: str = "FINAL", mass: Optional[float] = None, mass_factor: float = 1,
                          friction: float = 0.5, angular_damping: float = 0.1, linear_damping: float = 0.04):
         """ Enables the rigidbody component of the object which makes it participate in physics simulations.
 
-        :param active: If True, the object actively participates in the simulation and its key frames are ignored. If False, the object still follows its keyframes and only acts as an obstacle, but is not influenced by the simulation.
-        :param collision_shape: Collision shape of object in simulation. Default: 'CONVEX_HULL'. Available: 'BOX', 'SPHERE', 'CAPSULE', 'CYLINDER', 'CONE', 'CONVEX_HULL', 'MESH', 'COMPOUND'.
-        :param collision_margin: The margin around objects where collisions are already recognized. Higher values improve stability, but also make objects hover a bit.
-        :param collision_mesh_source: Source of the mesh used to create collision shape. Default: 'FINAL'. Available: 'BASE', 'DEFORM', 'FINAL'.
-        :param mass: The mass in kilogram the object should have. If None is given the mass is calculated based on its bounding box volume and the given `mass_factor`.
-        :param mass_factor: Scaling factor for mass. This is only considered if the given `mass` is None. Defines the linear function mass=bounding_box_volume*mass_factor (defines material density).
+        :param active: If True, the object actively participates in the simulation and its key frames are ignored.
+                       If False, the object still follows its keyframes and only acts as an obstacle, but is not
+                       influenced by the simulation.
+        :param collision_shape: Collision shape of object in simulation. Default: 'CONVEX_HULL'. Available: 'BOX',
+                                'SPHERE', 'CAPSULE', 'CYLINDER', 'CONE', 'CONVEX_HULL', 'MESH', 'COMPOUND'.
+        :param collision_margin: The margin around objects where collisions are already recognized. Higher values
+                                 improve stability, but also make objects hover a bit.
+        :param collision_mesh_source: Source of the mesh used to create collision shape. Default: 'FINAL'. Available:
+                                      ['BASE', 'DEFORM', 'FINAL'].
+        :param mass: The mass in kilogram the object should have. If None is given the mass is calculated based on
+                     its bounding box volume and the given `mass_factor`.
+        :param mass_factor: Scaling factor for mass. This is only considered if the given `mass` is None. Defines the
+                            linear function mass=bounding_box_volume*mass_factor (defines material density).
         :param friction: Resistance of object to movement.
         :param angular_damping: Amount of angular velocity that is lost over time.
         :param linear_damping: Amount of linear velocity that is lost over time.
@@ -215,12 +242,15 @@ class MeshObject(Entity):
         else:
             rigid_body.mass = mass
 
-    def build_convex_decomposition_collision_shape(self, vhacd_path: str, temp_dir: str = None, cache_dir: str = "blenderproc_resources/decomposition_cache"):
+    def build_convex_decomposition_collision_shape(self, vhacd_path: str, temp_dir: Optional[str] = None,
+                                                   cache_dir: str = "blenderproc_resources/decomposition_cache"):
         """ Builds a collision shape of the object by decomposing it into near convex parts using V-HACD
 
         :param vhacd_path: The directory in which vhacd should be installed or is already installed.
         :param temp_dir: The temp dir to use for storing the object files created by v-hacd.
-        :param cache_dir: If a directory is given, convex decompositions are stored there named after the meshes hash. If the same mesh is decomposed a second time, the result is loaded from the cache and the actual decomposition is skipped.
+        :param cache_dir: If a directory is given, convex decompositions are stored there named after the meshes hash.
+                          If the same mesh is decomposed a second time, the result is loaded from the cache and the
+                          actual decomposition is skipped.
         """
         if platform == "win32":
             raise Exception("This is currently not supported under Windows")
@@ -245,31 +275,16 @@ class MeshObject(Entity):
         """
         self.blender_obj.hide_render = hide_object
 
-    def set_parent(self, new_parent: Entity):
-        """ Sets the parent of this object.
-
-        :param new_parent: The new parent object.
-        """
-        self.blender_obj.parent = new_parent.blender_obj
-        self.blender_obj.matrix_parent_inverse = Matrix(new_parent.get_local2world_mat()).inverted()
-
-    def get_parent(self) -> Optional[Entity]:
-        """ Returns the parent object.
-
-        :return: The parent object, None if it has no parent.
-        """
-        return MeshObject(self.blender_obj.parent) if self.blender_obj.parent is not None else None
-
     def disable_rigidbody(self):
         """ Disables the rigidbody element of the object """
         if self.has_rigidbody_enabled():
             bpy.ops.rigidbody.object_remove({'object': self.blender_obj})
         else:
-            raise RuntimeError("MeshObject {} has no rigid_body component enabled".format(self.get_name()))
+            raise RuntimeError(f"MeshObject {self.get_name()} has no rigid_body component enabled")
 
     def has_rigidbody_enabled(self) -> bool:
         """ Checks whether object has rigidbody element enabled
-        
+
         :return: True if object has rigidbody element enabled
         """
         return self.get_rigidbody() is not None
@@ -304,9 +319,11 @@ class MeshObject(Entity):
     def mesh_as_bmesh(self, return_copy=False) -> bmesh.types.BMesh:
         """ Returns a bmesh based on the object's mesh.
 
-        Independent of return_copy, changes to the returned bmesh only take into affect after calling update_from_bmesh().
+        Independent of return_copy, changes to the returned bmesh only take into effect after calling
+        update_from_bmesh().
 
-        :param return_copy: If True, a copy of the objects bmesh will be returned, otherwise the bmesh owned by blender is returned (the object has to be in edit mode for that).
+        :param return_copy: If True, a copy of the objects bmesh will be returned, otherwise the bmesh owned by
+                            blender is returned (the object has to be in edit mode for that).
         :return: The bmesh
         """
         if return_copy:
@@ -336,6 +353,24 @@ class MeshObject(Entity):
                 bm.free()
         # Make sure the mesh is updated
         self.get_mesh().update()
+
+    def join_with_other_objects(self, objects: List["MeshObject"]):
+        """
+            Joins the given list of objects with this object.
+
+            Does not change the global selection.
+            The given object-references become invalid after the join operation.
+
+        :param objects: List of objects which will be merged with this object
+        """
+        context = {}
+        # save selection
+        context["object"] = context["active_object"] = self.blender_obj
+        # select all objects which will be merged with the target
+        context["selected_objects"] = context["selected_editable_objects"] = [obj.blender_obj for obj in objects] + \
+                                                                             [self.blender_obj]
+        # execute the joining operation
+        bpy.ops.object.join(context)
 
     def edit_mode(self):
         """ Switch into edit mode of this mesh object """
@@ -372,8 +407,10 @@ class MeshObject(Entity):
         If check_no_objects_in_between is True, this also checks that there are no other objects in between.
 
         :param position: The position to check.
-        :param down_direction: A vector specifying the direction straight down. If None is given, a vector into -Z direction is used.
-        :param check_no_objects_in_between: If True, it is also checked that no other objects are in between position and object.
+        :param down_direction: A vector specifying the direction straight down. If None is given, a vector
+                               into -Z direction is used.
+        :param check_no_objects_in_between: If True, it is also checked that no other objects are in between
+                                            position and object.
         :return: True, if a ray sent into negative z-direction starting from the position hits the object first.
         """
         if down_direction is None:
@@ -383,13 +420,12 @@ class MeshObject(Entity):
             # Send a ray straight down and check if the first hit object is the query object
             hit, _, _, _, hit_object, _ = scene_ray_cast(position, down_direction)
             return hit and hit_object == self
-        else:
-            # Compute world-to-local matrix, so we can bring position and down vector into the local coordinate system
-            world2local = Matrix(np.linalg.inv(self.get_local2world_mat()))
-            # Send raycast on object (this will ignore all other objects, so we only need to check whether the ray hit)
-            hit, _, _, _ = self.blender_obj.ray_cast(world2local @ Vector(position),
-                                                     world2local.to_3x3() @ Vector(down_direction))
-            return hit
+        # Compute world-to-local matrix, so we can bring position and down vector into the local coordinate system
+        world2local = Matrix(np.linalg.inv(self.get_local2world_mat()))
+        # Send raycast on object (this will ignore all other objects, so we only need to check whether the ray hit)
+        hit, _, _, _ = self.blender_obj.ray_cast(world2local @ Vector(position),
+                                                 world2local.to_3x3() @ Vector(down_direction))
+        return hit
 
     def ray_cast(self, origin: Union[Vector, list, np.ndarray], direction: Union[Vector, list, np.ndarray],
                  max_distance: float = 1.70141e+38) -> Tuple[bool, np.ndarray, np.ndarray, int]:
@@ -403,7 +439,8 @@ class MeshObject(Entity):
                  The face normal at the ray cast hit location, float array of 3 items in [-inf, inf]
                  The face index, -1 when original data isn’t available, int in [-inf, inf]
         """
-        result, location, normal, index = self.blender_obj.ray_cast(Vector(origin), Vector(direction), distance=max_distance)
+        result, location, normal, index = self.blender_obj.ray_cast(Vector(origin), Vector(direction),
+                                                                    distance=max_distance)
         return result, np.array(location), np.array(normal), index
 
     def add_uv_mapping(self, projection: str, overwrite: bool = False):
@@ -423,8 +460,8 @@ class MeshObject(Entity):
             elif projection == "sphere":
                 bpy.ops.uv.sphere_project()
             else:
-                raise Exception(
-                    "Unknown projection: '{}'. Please use 'cube', 'cylinder', 'smart' or 'sphere'.".format(projection))
+                raise RuntimeError(f"Unknown projection: '{projection}'. Please use 'cube', 'cylinder', "
+                                   f"'smart' or 'sphere'.")
             self.object_mode()
 
     def has_uv_mapping(self):
@@ -437,7 +474,7 @@ class MeshObject(Entity):
         return False
 
     def scale_uv_coordinates(self, factor: float):
-        """Scales the UV coordinates of an object by a given factor. Scaling with a factor greater than one has the 
+        """Scales the UV coordinates of an object by a given factor. Scaling with a factor greater than one has the
         effect of making the texture look smaller on the object.
 
         :param factor: The amount the UV coordinates will be scaled.
@@ -448,9 +485,9 @@ class MeshObject(Entity):
 
         mesh = self.blender_obj.data
         uv_layer = mesh.uv_layers.active
-        for loop in mesh.loops :
+        for loop in mesh.loops:
             uv_layer.data[loop.index].uv *= factor
-        
+
     def add_displace_modifier(self, texture: bpy.types.Texture, mid_level: float = 0.5, strength: float = 0.1,
                               min_vertices_for_subdiv: int = 10000, subdiv_level: int = 2):
         """ Adds a displace modifier with a texture to an object.
@@ -513,7 +550,8 @@ def create_with_empty_mesh(object_name: str, mesh_name: str = None) -> "MeshObje
 def create_primitive(shape: str, **kwargs) -> "MeshObject":
     """ Creates a new primitive mesh object.
 
-    :param shape: The name of the primitive to create. Available: ["CUBE", "CYLINDER", "CONE", "PLANE", "SPHERE", "MONKEY"]
+    :param shape: The name of the primitive to create. Available: ["CUBE", "CYLINDER", "CONE", "PLANE",
+                  "SPHERE", "MONKEY"]
     :return: The newly created MeshObject
     """
     if shape == "CUBE":
@@ -540,7 +578,7 @@ def create_primitive(shape: str, **kwargs) -> "MeshObject":
     return primitive
 
 
-def convert_to_meshes(blender_objects: list) -> List["MeshObject"]:
+def convert_to_meshes(blender_objects: list) -> List[MeshObject]:
     """ Converts the given list of blender objects to mesh objects
 
     :param blender_objects: List of blender objects.
@@ -549,7 +587,7 @@ def convert_to_meshes(blender_objects: list) -> List["MeshObject"]:
     return [MeshObject(obj) for obj in blender_objects]
 
 
-def get_all_mesh_objects() -> List["MeshObject"]:
+def get_all_mesh_objects() -> List[MeshObject]:
     """
     Returns all mesh objects in scene
 
@@ -565,7 +603,7 @@ def disable_all_rigid_bodies():
             obj.disable_rigidbody()
 
 
-def create_bvh_tree_multi_objects(mesh_objects: List["MeshObject"]) -> mathutils.bvhtree.BVHTree:
+def create_bvh_tree_multi_objects(mesh_objects: List[MeshObject]) -> mathutils.bvhtree.BVHTree:
     """ Creates a bvh tree which contains multiple mesh objects.
 
     Such a tree is later used for fast raycasting.
@@ -591,7 +629,7 @@ def create_bvh_tree_multi_objects(mesh_objects: List["MeshObject"]) -> mathutils
     return bvh_tree
 
 
-def compute_poi(objects: List["MeshObject"]) -> np.ndarray:
+def compute_poi(objects: List[MeshObject]) -> np.ndarray:
     """ Computes a point of interest in the scene. Point is defined as a location of the one of the selected objects
     that is the closest one to the mean location of the bboxes of the selected objects.
 
@@ -616,7 +654,7 @@ def compute_poi(objects: List["MeshObject"]) -> np.ndarray:
 
 def scene_ray_cast(origin: Union[Vector, list, np.ndarray], direction: Union[Vector, list, np.ndarray],
                    max_distance: float = 1.70141e+38) -> Tuple[
-    bool, np.ndarray, np.ndarray, int, "MeshObject", np.ndarray]:
+    bool, np.ndarray, np.ndarray, int, MeshObject, np.ndarray]:
     """ Cast a ray onto all geometry from the scene, in world space.
 
    :param origin: Origin of the ray, in world space.
