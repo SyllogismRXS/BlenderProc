@@ -372,7 +372,7 @@ class _CocoWriterUtility:
 
     @staticmethod
     def create_annotation_info(annotation_id: int, image_id: int, category_id: int, binary_mask: np.ndarray,
-                               mask_encoding_format: str, tolerance: int = 2) -> Optional[Dict[str, Union[str, int]]]:
+                               mask_encoding_format: str, tolerance: int = 0) -> Optional[Dict[str, Union[str, int]]]:
         """Creates info section of coco annotation
 
         :param annotation_id: integer to uniquly identify the annotation
